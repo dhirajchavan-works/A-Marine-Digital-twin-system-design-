@@ -1,0 +1,132 @@
+# Phase 07 — Full System Flow Diagram
+**Deliverable:** `marine_digital_twin_architecture.md`
+**Author:** Dhiraj Chavan | Quantum Track | Task 4
+
+---
+
+## The complete picture — every component, every connection
+
+Every box below represents a real deployed software component. Every arrow represents a real data handoff with a defined format. The flow runs top to bottom: real-world data enters, gets processed, feeds the simulation, which feeds the decision engine, which produces outputs. Nothing in here is theoretical — every layer can be built today.
+
+---
+
+## Full System Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        LAYER 1 — REAL WORLD                      │
+├─────────────────┬──────────────────┬────────────────────────────-┤
+│  HULL SENSORS   │   INSPECTION     │    SATELLITE DATA           │
+│  LPR/Ultrasonic │   Drydock / ROV  │    CMEMS / AIS / NOAA      │
+└────────┬────────┴────────┬─────────┴───────────┬─────────────────┘
+         │                 │                      │
+         └─────────────────┼──────────────────────┘
+                           ↓
+┌──────────────────────────────────────────────────────────────────┐
+│                   LAYER 2 — DATA INGESTION                       │
+│         ETL Pipeline + Parser + State Corrector                  │
+│   JSON/REST  ←  hourly  |  CSV/PDF  ←  per inspection           │
+│   NetCDF→SQL ←  daily   |  JSON→SQL ←  hourly (AIS)             │
+└──────────────────────────────┬───────────────────────────────────┘
+                               ↓  parsed & stored
+┌──────────────────────────────────────────────────────────────────┐
+│                  LAYER 3 — ENVIRONMENT DATABASE                  │
+│          PostgreSQL + PostGIS                                     │
+│          Temperature / Salinity / Dissolved O₂ / AIS positions  │
+│          Data retention: 5 years                                 │
+└──────────────────────────────┬───────────────────────────────────┘
+                               ↓  queried each timestep
+┌──────────────────┐  ┌────────────────────────────────────────────┐
+│  QUANTUM COMPUTE │  │      LAYER 4 — SIMULATION ENGINE           │
+│  (OFFLINE)       │→ │      (Classical — runs every timestep)     │
+│                  │  │                                            │
+│  VQE algorithm   │  │  Step 1: Input Update (env data)          │
+│  → material_     │  │  Step 2: CFD Flow (table lookup)          │
+│    table.json    │  │  Step 3: Biofouling Growth                │
+│                  │  │  Step 4: Corrosion Update                 │
+│  Molecular Sim   │  │  Step 5: Coating Degradation              │
+│  → coating_      │  │                                            │
+│    properties    │  │  Stack: Python / NumPy / SciPy / Pandas   │
+│    .json         │  │                                            │
+│                  │  │  Triggers: new alloy / new coating /      │
+│  Runs on:        │  │           annual recalibration            │
+│  IBM Quantum /   │  │                                            │
+│  Qiskit /        │  └──────────────────────┬─────────────────────┘
+│  PennyLane       │                         │ zone state snapshots (HDF5)
+└──────────────────┘                         ↓
+                        ┌────────────────────────────────────────────┐
+                        │       LAYER 5 — STATE DATABASE             │
+                        │       HDF5 + PostgreSQL                    │
+                        │       Zone snapshots + time-series history │
+                        └──────────────────────┬─────────────────────┘
+                                               ↓  queried per timestep
+                        ┌────────────────────────────────────────────┐
+                        │       LAYER 6 — DECISION ENGINE            │
+                        │                                            │
+                        │  Maintenance Schedule   Risk Zone Map     │
+                        │  Repainting Timeline    Fuel Cost ($)     │
+                        │  Alert Generation       Optimisation      │
+                        └─────────┬──────────────────┬──────────────┘
+                                  ↓                  ↓
+          ┌───────────────────────┼──────────────────┤
+          ↓                      ↓                   ↓
+┌─────────────────┐   ┌──────────────────┐   ┌──────────────────┐
+│   DASHBOARD     │   │     ALERTS       │   │    REPORTS       │
+│   React.js      │   │   Email / SMS /  │   │  PDF / CSV       │
+│   WebSocket     │   │   Webhook        │   │  Auto-scheduled  │
+│   Live update   │   │   On trigger     │   │  Weekly/Monthly  │
+└─────────────────┘   └──────────────────┘   └──────────────────┘
+```
+
+---
+
+## One-Sentence Summary
+
+Real-world data (sensors, inspections, satellite) enters through the ingestion layer → gets stored in the environment database → feeds the classical simulation engine (which reads quantum-precomputed parameter tables at startup) → simulation outputs are stored in the state database → the decision engine reads these and produces maintenance schedules, repainting timelines, fuel cost estimates, and risk maps → all delivered through the dashboard, alert system, and report generator.
+
+---
+
+## Complete Data Handoff Reference
+
+| From | To | What Gets Sent | Format | Frequency |
+|------|-----|---------------|--------|-----------|
+| Hull Sensors | Ingestion Layer | Corrosion rate, coat thickness | JSON / REST | Hourly / Daily |
+| Inspection Reports | Ingestion Layer | Actual measured zone values | CSV / PDF | Per inspection |
+| Satellite (CMEMS) | Environment DB | Temp, salinity, O₂ grids | NetCDF→SQL | Daily |
+| AIS Feed | Environment DB | Ship position, speed, port log | JSON→SQL | Hourly |
+| Environment DB | Simulation Engine | Per-zone environment values | DB query | Per timestep |
+| Quantum Compute | Simulation Engine | `material_table.json` | JSON file | On demand |
+| Quantum Compute | Simulation Engine | `coating_properties.json` | JSON file | On demand |
+| Simulation Engine | State DB | Zone state snapshots | HDF5 | Per timestep |
+| State DB | Decision Engine | Current + historical state | DB query | Per timestep |
+| Decision Engine | Dashboard | Risk scores, maint. dates | REST API | Real-time |
+| Decision Engine | Alert System | Threshold breach events | Email / SMS | On trigger |
+| Decision Engine | Report Generator | Structured summaries | PDF / CSV | Scheduled |
+
+---
+
+## System Startup Sequence — in order
+
+```
+1. Load material_table.json and coating_properties.json
+   — MUST exist before simulation can start
+   — if missing, run quantum compute layer first
+
+2. Initialise ship zone grid
+   — from last drydock inspection data (best case)
+   — from baseline estimates if first-time deployment
+
+3. Connect to environment database
+   — verify ETL pipeline has run and data is fresh (within 24 hours)
+
+4. Set simulation parameters
+   — start_date, end_date, timestep (default: weekly), ship_id
+
+5. Run simulation step cycle loop until target end date
+   — in live mode: automatically advance one week every real week
+
+6. Start dashboard server and enable WebSocket live updates
+
+7. Activate alert monitoring
+   — all threshold checks now live, routing matrix active
+```
