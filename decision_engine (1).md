@@ -1,6 +1,6 @@
 # Phase 05 — Decision Engine
 **Deliverable:** `decision_engine.md`
-**Author:** Dhiraj Chavan | Quantum Track | Task 4
+**Author:** Dhiraj Chavan | Quantum Track |
 
 ---
 
