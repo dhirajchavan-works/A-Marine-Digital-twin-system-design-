@@ -1,6 +1,6 @@
 # Phase 04 — Hybrid Compute Layer (Quantum + Classical)
 **Deliverable:** `compute_layer.md`
-**Author:** Dhiraj Chavan | Quantum Track | Task 4
+**Author:** Dhiraj Chavan | Quantum Track | 
 
 ---
 
